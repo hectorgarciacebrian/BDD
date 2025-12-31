@@ -100,12 +100,122 @@ public class RestriccionesTriggers{
             END;
         """;
 
+        // 17. Sucursal no pide a su misma delegación
+        String trgMismaSucursal = """
+            CREATE OR REPLACE TRIGGER trg_17_Delegacion
+            BEFORE INSERT OR UPDATE ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_ca1 VARCHAR2(50);
+                v_ca2 VARCHAR2(50);
+            BEGIN
+                SELECT c_autonoma INTO v_ca1 FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal;
+                SELECT c_autonoma INTO v_ca2 FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal_prov;
+                
+                IF v_ca1 = v_ca2 THEN
+                    RAISE_APPLICATION_ERROR(-20017, 'Error: No se puede pedir a una sucursal de la misma delegacion.');
+                END IF;
+            END;
+        """;
+
+        // 18. Cantidad pedida a sucursales no puede exceder demanda de clientes
+        String trgCantidadDemanda = """
+            CREATE OR REPLACE TRIGGER trg_18_Control_Stock
+            BEFORE INSERT OR UPDATE ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_demanda_clientes NUMBER := 0;
+                v_ya_pedido        NUMBER := 0;
+            BEGIN
+                -- Nota: En Pide se llama 'cod_vino', en Solicita 'cod_tipo_vino'
+                SELECT NVL(SUM(cantidad),0) INTO v_demanda_clientes 
+                FROM Pide 
+                WHERE cod_sucursal = :NEW.cod_sucursal AND cod_vino = :NEW.cod_tipo_vino;
+                
+                SELECT NVL(SUM(cantidad),0) INTO v_ya_pedido 
+                FROM Solicita 
+                WHERE cod_sucursal = :NEW.cod_sucursal AND cod_tipo_vino = :NEW.cod_tipo_vino;
+
+                IF (v_ya_pedido + :NEW.cantidad) > v_demanda_clientes THEN
+                    RAISE_APPLICATION_ERROR(-20018, 'Error: La cantidad solicitada excede la demanda de clientes.');
+                END IF;
+            END;
+        """;
+
+        // 19. Si el vino no es de mi zona, pedir a MADRID
+        String trgPedirMadrid = """
+            CREATE OR REPLACE TRIGGER trg_19_Ruta_Madrid
+            BEFORE INSERT OR UPDATE ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_ca_sucursal   VARCHAR2(50);
+                v_ca_vino       VARCHAR2(50);
+                v_ca_proveedora VARCHAR2(50);
+            BEGIN
+                SELECT c_autonoma INTO v_ca_sucursal FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal;
+                
+                -- Buscamos el origen del vino usando la referencia
+                SELECT c_autonoma INTO v_ca_vino     FROM Vino     WHERE cod_vino     = :NEW.cod_tipo_vino;
+                
+                SELECT c_autonoma INTO v_ca_proveedora FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal_prov;
+
+                IF v_ca_sucursal != v_ca_vino THEN
+                    IF UPPER(v_ca_proveedora) != 'MADRID' THEN
+                        RAISE_APPLICATION_ERROR(-20019, 'Error: Vinos de otras regiones deben pedirse a Madrid.');
+                    END IF;
+                END IF;
+            END;
+        """;
+
+        // 20. Fecha pedido posterior al ultimo pedido de ese vino a esa sucursal
+        String trgFechaOrden = """
+            CREATE OR REPLACE TRIGGER trg_20_Fecha_Orden
+            BEFORE INSERT OR UPDATE ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_max_fecha DATE;
+            BEGIN
+                SELECT MAX(fecha_sol) INTO v_max_fecha
+                FROM Solicita
+                WHERE cod_sucursal = :NEW.cod_sucursal 
+                  AND cod_sucursal_prov = :NEW.cod_sucursal_prov
+                  AND cod_tipo_vino = :NEW.cod_tipo_vino;
+
+                IF v_max_fecha IS NOT NULL AND :NEW.fecha_sol <= v_max_fecha THEN
+                    RAISE_APPLICATION_ERROR(-20020, 'Error: La fecha debe ser posterior al ultimo pedido de este vino a esta sucursal.');
+                END IF;
+            END;
+        """;
+
+        // 21. Fecha solicitud posterior a ultima petición cliente
+        String trgFechaCliente = """
+            CREATE OR REPLACE TRIGGER trg_21_Fecha_Cliente
+            BEFORE INSERT OR UPDATE ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_max_fecha_cli DATE;
+            BEGIN
+                SELECT MAX(fecha_pide) INTO v_max_fecha_cli
+                FROM Pide
+                WHERE cod_sucursal = :NEW.cod_sucursal AND cod_vino = :NEW.cod_tipo_vino;
+
+                IF v_max_fecha_cli IS NOT NULL AND :NEW.fecha_sol <= v_max_fecha_cli THEN
+                    RAISE_APPLICATION_ERROR(-20021, 'Error: La solicitud debe ser posterior a la ultima demanda del cliente.');
+                END IF;
+            END;
+        """;
+
         String[] triggers = { 
             trgBorrarProductor, 
             triggerBorrarVino, 
             triggerFechaSuministro, 
             triggerClienteDelegacion, 
-            triggerSalario 
+            triggerSalario,
+            trgMismaSucursal,
+            trgCantidadDemanda,
+            trgPedirMadrid,
+            trgFechaOrden,
+            trgFechaCliente 
         };
 
         for (DatabaseManager.Delegacion d : DatabaseManager.Delegacion.values()) {

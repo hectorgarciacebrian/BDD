@@ -82,6 +82,7 @@ public class CreacionTablas {
                 fecha_su     DATE NOT NULL,
                 cod_vino     NUMBER(8) NOT NULL,
                 cod_sucursal NUMBER(8) NOT NULL
+                
             )
             """,
             // Relación: SOLICITA
@@ -89,6 +90,8 @@ public class CreacionTablas {
             CREATE TABLE Solicita (
                 fecha_sol    DATE NOT NULL,
                 cod_sucursal NUMBER(8) NOT NULL,
+                cod_sucursal_prov NUMBER(8) NOT NULL,
+                cod_tipo_vino NUMBER(8) NOT NULL,
                 cantidad     NUMBER(8)
             )
             """,
@@ -115,7 +118,7 @@ public class CreacionTablas {
             
             // PKs Compuestas para las relaciones
             "ALTER TABLE Suministra ADD CONSTRAINT PK_Suministra PRIMARY KEY (fecha_su, cod_vino, cod_sucursal)",
-            "ALTER TABLE Solicita ADD CONSTRAINT PK_Solicita PRIMARY KEY (fecha_sol, cod_sucursal)",
+           "ALTER TABLE Solicita ADD CONSTRAINT PK_Solicita PRIMARY KEY (fecha_sol, cod_sucursal, cod_sucursal_prov, cod_tipo_vino)",
             "ALTER TABLE Pide ADD CONSTRAINT PK_Pide PRIMARY KEY (fecha_pide, cod_vino, cod_sucursal, cod_cliente)",
 
             // --- UNIQUE KEYS ---
@@ -135,7 +138,9 @@ public class CreacionTablas {
             "ALTER TABLE Pide ADD CONSTRAINT FK_Pide_Suc FOREIGN KEY (cod_sucursal) REFERENCES Sucursal (cod_sucursal)",
             "ALTER TABLE Pide ADD CONSTRAINT FK_Pide_Clien FOREIGN KEY (cod_cliente) REFERENCES Cliente (cod_c)",
             
-            "ALTER TABLE Solicita ADD CONSTRAINT FK_Solicita_Suc FOREIGN KEY (cod_sucursal) REFERENCES Sucursal (cod_sucursal)",
+            "ALTER TABLE Solicita ADD CONSTRAINT FK_Solicita_Suc_Pide FOREIGN KEY (cod_sucursal) REFERENCES Sucursal (cod_sucursal)",
+            "ALTER TABLE Solicita ADD CONSTRAINT FK_Solicita_Suc_Prov FOREIGN KEY (cod_sucursal_prov) REFERENCES Sucursal (cod_sucursal)",
+            "ALTER TABLE Solicita ADD CONSTRAINT FK_Solicita_Vino     FOREIGN KEY (cod_tipo_vino) REFERENCES Vino (cod_vino)",
 
             // Director de Sucursal 
             "ALTER TABLE Sucursal ADD CONSTRAINT FK_Sucursal_Director FOREIGN KEY (director) REFERENCES Empleado (cod_e)"
