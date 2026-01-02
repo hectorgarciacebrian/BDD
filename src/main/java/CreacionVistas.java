@@ -6,56 +6,76 @@ public class CreacionVistas {
 
     public static void main(String[] args) {
         DatabaseManager db = DatabaseManager.getInstance();
-        System.out.println("--- CREANDO VISTAS DEL SISTEMA ---");
+        System.out.println("--- CREANDO VISTAS (UNA POR TABLA) ---");
 
-        // 1. Vista de la agregación sucursal y vino ofertado
-        String viewOferta = """
-            CREATE OR REPLACE VIEW Vista_Oferta_Sucursal AS
-            SELECT 
-                s.nombre AS Sucursal, 
-                s.ciudad,
-                v.vinedo AS Vino, 
-                v.stock, 
-                v.c_producida
-            FROM Suministra sum
-            JOIN Sucursal s ON sum.cod_sucursal = s.cod_sucursal
-            JOIN Vino v     ON sum.cod_vino = v.cod_vino
-        """;
+        // Array con las sentencias SQL para crear una vista por cada tabla
+        String[] vistas = {
+            
+            // 1. VISTA SUCURSALES
+            """
+            CREATE OR REPLACE VIEW Vista_Sucursales AS
+            SELECT cod_sucursal, nombre, ciudad, c_autonoma, director
+            FROM Sucursal
+            """,
 
-        // 2. Vista de pedidos de clientes
-        String viewPedidosClientes = """
-            CREATE OR REPLACE VIEW Vista_Pedidos_Clientes AS
-            SELECT 
-                p.fecha_pide, 
-                c.nombre_c AS Cliente, 
-                v.vinedo AS Vino_Solicitado, 
-                s.nombre AS Sucursal, 
-                p.cantidad
-            FROM Pide p
-            JOIN Cliente c  ON p.cod_cliente = c.cod_c
-            JOIN Vino v     ON p.cod_vino = v.cod_vino
-            JOIN Sucursal s ON p.cod_sucursal = s.cod_sucursal
-        """;
+            // 2. VISTA PRODUCTORES
+            """
+            CREATE OR REPLACE VIEW Vista_Productores AS
+            SELECT cod_p, dni_p, nombre_p, direccion_p
+            FROM Productor
+            """,
 
-        // 3. Vista entre pedidos de sucursales
-        String viewPedidosSucursales = """
-            CREATE OR REPLACE VIEW Vista_Logistica_Sucursales AS
-            SELECT 
-                sol.fecha_sol, 
-                s_origen.nombre AS Sucursal_Pide, 
-                s_destino.nombre AS Sucursal_Provee, 
-                v.vinedo AS Vino, 
-                sol.cantidad
-            FROM Solicita sol
-            JOIN Sucursal s_origen  ON sol.cod_sucursal = s_origen.cod_sucursal
-            JOIN Sucursal s_destino ON sol.cod_sucursal_prov = s_destino.cod_sucursal
-            JOIN Vino v             ON sol.cod_tipo_vino = v.cod_vino
-        """;
+            // 3. VISTA VINOS
+            // Muestra los datos del vino. (Podríamos hacer JOIN con Productor para ver el nombre, pero mantenemos la estructura base)
+            """
+            CREATE OR REPLACE VIEW Vista_Vinos AS
+            SELECT cod_vino, nombre_v AS Marca, anio, denominacion, graduacion, vinedo, c_autonoma, stock, productor
+            FROM Vino
+            """,
 
-        String[] vistas = { viewOferta, viewPedidosClientes, viewPedidosSucursales };
+            // 4. VISTA EMPLEADOS
+            """
+            CREATE OR REPLACE VIEW Vista_Empleados AS
+            SELECT cod_e, dni_e, nombre_e, fecha_comp, salario, sucursal_dest
+            FROM Empleado
+            """,
 
+            // 5. VISTA CLIENTES
+            """
+            CREATE OR REPLACE VIEW Vista_Clientes AS
+            SELECT cod_c, dni_c, nombre_c, direccion_c, tipo_c, c_autonoma
+            FROM Cliente
+            """,
+
+            // 6. VISTA SUMINISTROS (Relación Pide: Cliente -> Sucursal)
+            """
+            CREATE OR REPLACE VIEW Vista_Suministros_Clientes AS
+            SELECT cod_cliente, cod_sucursal, cod_vino, fecha_pide, cantidad
+            FROM Pide
+            """,
+
+            // 7. VISTA PEDIDOS INTERNOS (Relación Solicita: Sucursal -> Sucursal)
+            """
+            CREATE OR REPLACE VIEW Vista_Pedidos_Entre_Sucursales AS
+            SELECT cod_sucursal AS Sucursal_Solicitante, 
+                   cod_sucursal_prov AS Sucursal_Proveedora, 
+                   cod_tipo_vino AS Vino, 
+                   fecha_sol, 
+                   cantidad
+            FROM Solicita
+            """,
+
+            // 8. VISTA CATALOGO (Relación Suministra: Qué vinos tiene cada sucursal)
+            """
+            CREATE OR REPLACE VIEW Vista_Catalogo_Distribucion AS
+            SELECT cod_sucursal, cod_vino, fecha_su
+            FROM Suministra
+            """
+        };
+
+        // Ejecución de las vistas en cada nodo/delegación
         for (DatabaseManager.Delegacion d : DatabaseManager.Delegacion.values()) {
-            System.out.println("\nNodo: " + d);
+            System.out.println("\nProcesando nodo: " + d);
             try (Connection conn = db.getConnection(d);
                  Statement stmt = conn.createStatement()) {
 
@@ -64,15 +84,15 @@ public class CreacionVistas {
                     try {
                         stmt.executeUpdate(sql);
                     } catch (SQLException e) {
-                        System.err.println("\nError vista: " + e.getMessage());
+                        System.err.println("\nError creando vista: " + e.getMessage());
                     }
                 }
                 System.out.println("OK.");
 
             } catch (SQLException e) {
-                System.err.println("Error conexión: " + e.getMessage());
+                System.err.println("Error de conexión: " + e.getMessage());
             }
         }
-        System.out.println("\nPROCESO FINALIZADO.");
+        System.out.println("\nTODAS LAS VISTAS CREADAS CORRECTAMENTE.");
     }
 }

@@ -44,12 +44,16 @@ public class CreacionTablas {
             // Entidad: VINO
             """
             CREATE TABLE Vino (
-                cod_vino     NUMBER(8) NOT NULL,
-                stock        NUMBER(8) DEFAULT 0,
-                vinedo       VARCHAR2(50), 
-                c_autonoma   VARCHAR2(50),
-                c_producida  NUMBER(8,2), 
-                productor    NUMBER(8) NOT NULL 
+                cod_vino      NUMBER(8) NOT NULL,
+                nombre_v      VARCHAR2(50),  
+                anio          NUMBER(4),     
+                denominacion  VARCHAR2(50),  
+                graduacion    NUMBER(4,2),   
+                vinedo        VARCHAR2(50), 
+                c_autonoma    VARCHAR2(50),
+                c_producida   NUMBER(8), 
+                stock         NUMBER(8) DEFAULT 0,
+                productor     NUMBER(8) NOT NULL 
             )
             """,
             // Entidad: EMPLEADO

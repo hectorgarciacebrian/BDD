@@ -1,6 +1,9 @@
+Consultas.class
 Main.class
 CreacionVistas.class
+CargaDatos.class
 DatabaseManager$Delegacion.class
 CreacionTablas.class
 RestriccionesTriggers.class
 DatabaseManager.class
+CreacionProcedimientos.class
