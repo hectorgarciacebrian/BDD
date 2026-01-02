@@ -154,21 +154,18 @@ public class CreacionTablas {
             try (Connection conn = db.getConnection(d);
                  Statement stmt = conn.createStatement()) {
 
-                // 1. Borrar tablas viejas
                 System.out.print("Limpiando... ");
                 for (String sql : drops) {
                     try { stmt.executeUpdate(sql); } catch (SQLException ignored) {}
                 }
                 System.out.println("OK.");
 
-                // 2. Crear tablas nuevas
                 System.out.print("Creando estructura... ");
                 for (String sql : creates) {
                     stmt.executeUpdate(sql);
                 }
                 System.out.println("OK.");
 
-                // 3. Poner restricciones
                 System.out.print("Conectando claves... ");
                 for (String sql : constraints) {
                     stmt.executeUpdate(sql);
