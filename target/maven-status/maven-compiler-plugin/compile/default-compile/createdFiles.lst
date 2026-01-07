@@ -3,6 +3,7 @@ Main.class
 CreacionVistas.class
 CargaDatos.class
 DatabaseManager$Delegacion.class
+Permisos.class
 CreacionTablas.class
 RestriccionesTriggers.class
 DatabaseManager.class

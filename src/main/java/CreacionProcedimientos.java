@@ -286,7 +286,6 @@ public class CreacionProcedimientos{
             """,
 
             // 12. Dar de alta un nuevo vino
-            // Nota: Recibe todos los parametros teoricos, pero solo usa los que existen en la tabla Vino
             """
             CREATE OR REPLACE PROCEDURE pr_Alta_Vino (
                 p_cod_vino     IN NUMBER,
@@ -315,13 +314,24 @@ public class CreacionProcedimientos{
             END;
             """,
 
-            // 13. Dar de baja un vino
+            // 13. Dar de baja un vino 
             """
             CREATE OR REPLACE PROCEDURE pr_Baja_Vino (
                 p_cod_vino IN NUMBER
             ) IS
             BEGIN
+                -- 1. Eliminar referencias en la tabla de pedidos de clientes (Pide)
+                DELETE FROM Pide WHERE cod_vino = p_cod_vino;
+
+                -- 2. Eliminar referencias en la tabla de solicitudes de sucursales (Solicita)
+                DELETE FROM Solicita WHERE cod_tipo_vino = p_cod_vino;
+
+                -- 3. Eliminar referencias en la tabla de suministros de sucursales (Suministra)
+                DELETE FROM Suministra WHERE cod_vino = p_cod_vino;
+
+                -- 4. Una vez limpio el historial, borramos el vino
                 DELETE FROM Vino WHERE cod_vino = p_cod_vino;
+                
                 IF SQL%ROWCOUNT = 0 THEN
                     RAISE_APPLICATION_ERROR(-20017, 'Error: No existe el vino a borrar.');
                 END IF;
@@ -351,13 +361,29 @@ public class CreacionProcedimientos{
                 p_cod_p IN NUMBER
             ) IS
             BEGIN
-                DELETE FROM Productor WHERE cod_p = p_cod_p;
+                -- 1. LIMPIEZA DE NIETOS (Pedidos, Solicitudes, Suministros)
+                -- Usamos 'productor' porque asi se llama la columna en tu tabla Vino
                 
+                DELETE FROM Pide 
+                WHERE cod_vino IN (SELECT cod_vino FROM Vino WHERE productor = p_cod_p);
+
+                DELETE FROM Solicita 
+                WHERE cod_tipo_vino IN (SELECT cod_vino FROM Vino WHERE productor = p_cod_p);
+
+                DELETE FROM Suministra
+                WHERE cod_vino IN (SELECT cod_vino FROM Vino WHERE productor = p_cod_p);
+
+                -- 2. LIMPIEZA DE HIJOS (Vinos del productor)
+                DELETE FROM Vino WHERE productor = p_cod_p;
+
+                -- 3. LIMPIEZA DEL PADRE (El Productor)
+                DELETE FROM Productor WHERE cod_p = p_cod_p;
+
                 IF SQL%ROWCOUNT = 0 THEN
                     RAISE_APPLICATION_ERROR(-20019, 'Error: No existe el productor a borrar.');
                 END IF;
             END;
-            """
+            """,
         };
 
         System.out.println("--- CREACIÓN DE PROCEDIMIENTOS ALMACENADOS ---");
