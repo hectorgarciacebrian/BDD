@@ -129,6 +129,7 @@ public class CreacionTablas {
             "ALTER TABLE Productor ADD CONSTRAINT UQ_Productor_DNI UNIQUE (dni_p)",
             "ALTER TABLE Empleado ADD CONSTRAINT UQ_Empleado_DNI UNIQUE (dni_e)",
             "ALTER TABLE Cliente ADD CONSTRAINT UQ_Cliente_DNI UNIQUE (dni_c)",
+            "ALTER TABLE Sucursal ADD CONSTRAINT UQ_Sucursal_Director UNIQUE (director)",
 
             // --- FOREIGN KEYS  ---
             // Vino apunta a Productor
