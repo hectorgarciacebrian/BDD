@@ -6,85 +6,57 @@ public class CreacionVistas {
 
     public static void main(String[] args) {
         DatabaseManager db = DatabaseManager.getInstance();
-        System.out.println("--- CREANDO VISTAS (UNA POR TABLA) ---");
+        System.out.println("--- CREANDO VISTAS GLOBALES (ESQUEMAS: cerveza1..cerveza4) ---");
 
-        // Array con las sentencias SQL para crear una vista por cada tabla
-        String[] vistas = {
-            
-            // 1. VISTA SUCURSALES
-            """
-            CREATE OR REPLACE VIEW Vista_Sucursales AS
-            SELECT cod_sucursal, nombre, ciudad, c_autonoma, director
-            FROM Sucursal
-            """,
+        // Recorremos cada nodo para conectarnos y crear las vistas en su esquema
+        for (DatabaseManager.Delegacion nodoActual : DatabaseManager.Delegacion.values()) {
+            System.out.println("\nProcesando nodo: " + nodoActual);
 
-            // 2. VISTA PRODUCTORES
-            """
-            CREATE OR REPLACE VIEW Vista_Productores AS
-            SELECT cod_p, dni_p, nombre_p, direccion_p
-            FROM Productor
-            """,
-
-            // 3. VISTA VINOS
-            // Muestra los datos del vino. (Podríamos hacer JOIN con Productor para ver el nombre, pero mantenemos la estructura base)
-            """
-            CREATE OR REPLACE VIEW Vista_Vinos AS
-            SELECT cod_vino, nombre_v AS Marca, anio, denominacion, graduacion, vinedo, c_autonoma, stock, productor
-            FROM Vino
-            """,
-
-            // 4. VISTA EMPLEADOS
-            """
-            CREATE OR REPLACE VIEW Vista_Empleados AS
-            SELECT cod_e, dni_e, nombre_e, fecha_comp, salario, sucursal_dest
-            FROM Empleado
-            """,
-
-            // 5. VISTA CLIENTES
-            """
-            CREATE OR REPLACE VIEW Vista_Clientes AS
-            SELECT cod_c, dni_c, nombre_c, direccion_c, tipo_c, c_autonoma
-            FROM Cliente
-            """,
-
-            // 6. VISTA SUMINISTROS (Relación Pide: Cliente -> Sucursal)
-            """
-            CREATE OR REPLACE VIEW Vista_Suministros_Clientes AS
-            SELECT cod_cliente, cod_sucursal, cod_vino, fecha_pide, cantidad
-            FROM Pide
-            """,
-
-            // 7. VISTA PEDIDOS INTERNOS (Relación Solicita: Sucursal -> Sucursal)
-            """
-            CREATE OR REPLACE VIEW Vista_Pedidos_Entre_Sucursales AS
-            SELECT cod_sucursal AS Sucursal_Solicitante, 
-                   cod_sucursal_prov AS Sucursal_Proveedora, 
-                   cod_tipo_vino AS Vino, 
-                   fecha_sol, 
-                   cantidad
-            FROM Solicita
-            """,
-
-            // 8. VISTA CATALOGO (Relación Suministra: Qué vinos tiene cada sucursal)
-            """
-            CREATE OR REPLACE VIEW Vista_Catalogo_Distribucion AS
-            SELECT cod_sucursal, cod_vino, fecha_su
-            FROM Suministra
-            """
-        };
-
-        // Ejecución de las vistas en cada nodo/delegación
-        for (DatabaseManager.Delegacion d : DatabaseManager.Delegacion.values()) {
-            System.out.println("\nProcesando nodo: " + d);
-            try (Connection conn = db.getConnection(d);
+            try (Connection conn = db.getConnection(nodoActual);
                  Statement stmt = conn.createStatement()) {
 
-                System.out.print("Generando vistas... ");
+                // Definimos las vistas usando nombres de esquema explícitos (cervezaX.Tabla)
+                String[] vistas = {
+                    // 1. VISTA SUCURSALES
+                    "CREATE OR REPLACE VIEW Vista_Sucursales AS " +
+                    generarUnionEsquemas("cod_sucursal, nombre, ciudad, c_autonoma, director", "Sucursal"),
+
+                    // 2. VISTA PRODUCTORES
+                    "CREATE OR REPLACE VIEW Vista_Productores AS " +
+                    generarUnionEsquemas("cod_p, dni_p, nombre_p, direccion_p", "Productor"),
+
+                    // 3. VISTA VINOS
+                    "CREATE OR REPLACE VIEW Vista_Vinos AS " +
+                    generarUnionEsquemas("cod_vino, nombre_v AS Marca, anio, denominacion, graduacion, vinedo, c_autonoma, stock, productor", "Vino"),
+
+                    // 4. VISTA EMPLEADOS
+                    "CREATE OR REPLACE VIEW Vista_Empleados AS " +
+                    generarUnionEsquemas("cod_e, dni_e, nombre_e, fecha_comp, salario, sucursal_dest", "Empleado"),
+
+                    // 5. VISTA CLIENTES
+                    "CREATE OR REPLACE VIEW Vista_Clientes AS " +
+                    generarUnionEsquemas("cod_c, dni_c, nombre_c, direccion_c, tipo_c, c_autonoma", "Cliente"),
+
+                    // 6. VISTA SUMINISTROS (Pide)
+                    "CREATE OR REPLACE VIEW Vista_Suministros_Clientes AS " +
+                    generarUnionEsquemas("cod_cliente, cod_sucursal, cod_vino, fecha_pide, cantidad", "Pide"),
+
+                    // 7. VISTA PEDIDOS INTERNOS (Solicita)
+                    "CREATE OR REPLACE VIEW Vista_Pedidos_Entre_Sucursales AS " +
+                    generarUnionEsquemas("cod_sucursal AS Suc_Sol, cod_sucursal_prov AS Suc_Prov, cod_tipo_vino AS Vino, fecha_sol, cantidad", "Solicita"),
+
+                    // 8. VISTA CATALOGO (Suministra)
+                    "CREATE OR REPLACE VIEW Vista_Catalogo_Distribucion AS " +
+                    generarUnionEsquemas("cod_sucursal, cod_vino, fecha_su", "Suministra")
+                };
+
+                // Ejecutamos la creación de vistas
+                System.out.print("   -> Generando vistas... ");
                 for (String sql : vistas) {
                     try {
                         stmt.executeUpdate(sql);
                     } catch (SQLException e) {
-                        System.err.println("\nError creando vista: " + e.getMessage());
+                        System.err.println("\n      Error SQL: " + e.getMessage());
                     }
                 }
                 System.out.println("OK.");
@@ -93,6 +65,46 @@ public class CreacionVistas {
                 System.err.println("Error de conexión: " + e.getMessage());
             }
         }
-        System.out.println("\nTODAS LAS VISTAS CREADAS CORRECTAMENTE.");
+        System.out.println("\nPROCESO TERMINADO.");
+    }
+
+    /**
+     * Genera la consulta UNION ALL usando prefijos de esquema (cerveza1., cerveza2., etc.)
+     * Ejemplo salida: SELECT ... FROM cerveza1.Sucursal UNION ALL SELECT ... FROM cerveza2.Sucursal ...
+     */
+    private static String generarUnionEsquemas(String columnas, String tabla) {
+        StringBuilder sb = new StringBuilder();
+        
+        // Iteramos por las 4 delegaciones para construir la query global
+        DatabaseManager.Delegacion[] todos = DatabaseManager.Delegacion.values();
+        
+        for (int i = 0; i < todos.length; i++) {
+            DatabaseManager.Delegacion d = todos[i];
+            
+            // Obtenemos el nombre del esquema (cerveza1, cerveza2...)
+            String esquema = getEsquema(d);
+            
+            sb.append("SELECT ").append(columnas).append(" FROM ");
+            
+            // Construimos referencia: cervezaX.Tabla
+            sb.append(esquema).append(".").append(tabla);
+
+            // Añadimos UNION ALL si no es el último
+            if (i < todos.length - 1) {
+                sb.append(" UNION ALL ");
+            }
+        }
+        return sb.toString();
+    }
+
+    // Mapea la Delegación al nombre del Esquema/Usuario de la BD
+    private static String getEsquema(DatabaseManager.Delegacion d) {
+        switch (d) {
+            case MADRID:    return "cerveza1";
+            case BARCELONA: return "cerveza2";
+            case CORUNA:    return "cerveza3";
+            case SEVILLA:   return "cerveza4";
+            default:        return "cerveza1";
+        }
     }
 }

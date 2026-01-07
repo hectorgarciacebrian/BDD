@@ -2,18 +2,69 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-public class RestriccionesTriggers{
+public class RestriccionesTriggers {
     public static void main(String[] args) {
         DatabaseManager db = DatabaseManager.getInstance();
+        System.out.println("--- APLICANDO RESTRICCIONES Y TRIGGERS (CORREGIDO VISTAS) ---");
 
-        String[] cheks = {
-            // Restricciones 8 y 14 
+        // 1. CHECKS ESTÁNDAR
+        String[] checks = {
             "ALTER TABLE Cliente ADD CONSTRAINT CK_Tipo_Cliente CHECK (tipo_c IN ('A', 'B', 'C'))",
-            "ALTER TABLE Vino ADD CONSTRAINT CK_Stock_Logico CHECK (stock >= 0 and stock <= c_producida)",
+            "ALTER TABLE Vino ADD CONSTRAINT CK_Stock_Logico CHECK (stock >= 0 and stock <= c_producida)"
         };
 
-        //Restricciones 1-5, 7, 11-13: Ya están cubiertas por las claves primarias (PK), foráneas (FK) y NOT NULL creadas en CreacionTablas.java.
-        // Triggers
+        // 2. ELIMINACIÓN DE FKs LOCALES SOBRE VINO
+        String[] dropFKs = {
+            "ALTER TABLE Pide DROP CONSTRAINT FK_Pide_Vino",
+            "ALTER TABLE Solicita DROP CONSTRAINT FK_Solicita_Vino",
+            "ALTER TABLE Suministra DROP CONSTRAINT FK_Suministra_Vino"
+        };
+
+        // INTEGRIDAD: Comprobar vino en Pide mirando la VISTA GLOBAL
+        String trgIntegridadPide = """
+            CREATE OR REPLACE TRIGGER trg_Integridad_Pide_Vino
+            BEFORE INSERT OR UPDATE OF cod_vino ON Pide
+            FOR EACH ROW
+            DECLARE
+                v_existe NUMBER;
+            BEGIN
+                SELECT COUNT(*) INTO v_existe FROM Vista_Vinos WHERE cod_vino = :NEW.cod_vino;
+                IF v_existe = 0 THEN
+                    RAISE_APPLICATION_ERROR(-20000, 'Error Integridad: El vino ' || :NEW.cod_vino || ' no existe en ninguna delegación.');
+                END IF;
+            END;
+        """;
+
+        // INTEGRIDAD: Comprobar vino en Solicita mirando la VISTA GLOBAL
+        String trgIntegridadSolicita = """
+            CREATE OR REPLACE TRIGGER trg_Integridad_Sol_Vino
+            BEFORE INSERT OR UPDATE OF cod_tipo_vino ON Solicita
+            FOR EACH ROW
+            DECLARE
+                v_existe NUMBER;
+            BEGIN
+                SELECT COUNT(*) INTO v_existe FROM Vista_Vinos WHERE cod_vino = :NEW.cod_tipo_vino;
+                IF v_existe = 0 THEN
+                    RAISE_APPLICATION_ERROR(-20000, 'Error Integridad: El vino ' || :NEW.cod_tipo_vino || ' no existe en ninguna delegación.');
+                END IF;
+            END;
+        """;
+
+        // INTEGRIDAD: Comprobar vino en Suministra mirando la VISTA GLOBAL
+        String trgIntegridadSuministra = """
+            CREATE OR REPLACE TRIGGER trg_Integridad_Sum_Vino
+            BEFORE INSERT OR UPDATE OF cod_vino ON Suministra
+            FOR EACH ROW
+            DECLARE
+                v_existe NUMBER;
+            BEGIN
+                SELECT COUNT(*) INTO v_existe FROM Vista_Vinos WHERE cod_vino = :NEW.cod_vino;
+                IF v_existe = 0 THEN
+                    RAISE_APPLICATION_ERROR(-20000, 'Error Integridad: El vino ' || :NEW.cod_vino || ' no existe en ninguna delegación.');
+                END IF;
+            END;
+        """;
+
         // 6. El salario no puede disminuirse
         String triggerSalario = """
             CREATE OR REPLACE TRIGGER trg_Salario_NoDisminuye
@@ -24,25 +75,47 @@ public class RestriccionesTriggers{
                     RAISE_APPLICATION_ERROR(-20001, 'Error: El salario no puede disminuirse.');
                 END IF;
             END;
-            """;
-        // 9. Cliente solo pide a sucursal de su delegacion
+        """;
+
+        // 9. Cliente solo pide a sucursal de su delegacion (CORREGIDO: Usa Vistas)
         String triggerClienteDelegacion = """
             CREATE OR REPLACE TRIGGER trg_Cliente_Pide_Delegacion
             BEFORE INSERT OR UPDATE ON Pide
             FOR EACH ROW
             DECLARE
-                v_c_autonoma_cliente VARCHAR2(50);
-                v_c_autonoma_sucursal VARCHAR2(50);
-            BEGIN
-                SELECT c_autonoma INTO v_c_autonoma_cliente FROM Cliente WHERE cod_c = :NEW.cod_cliente;
-                SELECT c_autonoma INTO v_c_autonoma_sucursal FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal;
+                v_ca_cliente  VARCHAR2(50);
+                v_ca_sucursal VARCHAR2(50);
+                v_delegacion_cliente NUMBER;
+                v_delegacion_sucursal NUMBER;
                 
-                IF v_c_autonoma_cliente != v_c_autonoma_sucursal THEN
-                    RAISE_APPLICATION_ERROR(-20002, 'Error: El cliente solo puede pedir a sucursales de su misma comunidad autonoma.');
+                FUNCTION get_delegacion(p_ccaa VARCHAR2) RETURN NUMBER IS
+                BEGIN
+                    IF p_ccaa IN ('Castilla-León', 'Castilla-La Mancha', 'Aragón', 'Madrid', 'La Rioja') THEN RETURN 1;
+                    ELSIF p_ccaa IN ('Cataluña', 'Baleares', 'País Valenciano', 'Murcia') THEN RETURN 2;
+                    ELSIF p_ccaa IN ('Galicia', 'Asturias', 'Cantabria', 'País Vasco', 'Navarra') THEN RETURN 3;
+                    ELSIF p_ccaa IN ('Andalucía', 'Extremadura', 'Canarias', 'Ceuta', 'Melilla') THEN RETURN 4;
+                    ELSE RETURN 0;
+                    END IF;
+                END;
+            BEGIN
+                -- CAMBIO: Usamos Vistas Globales para evitar error si el cliente/sucursal es de otro nodo
+                SELECT c_autonoma INTO v_ca_cliente FROM Vista_Clientes WHERE cod_c = :NEW.cod_cliente;
+                SELECT c_autonoma INTO v_ca_sucursal FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal;
+
+                v_delegacion_cliente := get_delegacion(v_ca_cliente);
+                v_delegacion_sucursal := get_delegacion(v_ca_sucursal);
+
+                IF v_delegacion_cliente != v_delegacion_sucursal THEN
+                    RAISE_APPLICATION_ERROR(-20002, 
+                        'Error: Jurisdicción. Cliente de ' || v_ca_cliente || ' intentó comprar en ' || v_ca_sucursal);
                 END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                   RAISE_APPLICATION_ERROR(-20002, 'Error: Cliente o Sucursal no encontrados en el sistema global.');
             END;
-            """;
-        // 10. Para el cliente la fecha de suministro tendra que ser igual o posterior a la fecha de su ultimo suministro
+        """;
+
+        // 10. Fecha suministro >= ultima fecha
         String triggerFechaSuministro = """
             CREATE OR REPLACE TRIGGER trg_Fecha_Suministro_Cliente
             BEFORE INSERT OR UPDATE ON Pide
@@ -52,15 +125,15 @@ public class RestriccionesTriggers{
             BEGIN
                 SELECT MAX(fecha_pide) INTO v_ultima_fecha_suministro 
                 FROM Pide 
-                WHERE cod_cliente = :NEW.cod_cliente
+                WHERE cod_cliente = :NEW.cod_cliente;
                 
                 IF v_ultima_fecha_suministro IS NOT NULL AND :NEW.fecha_pide < v_ultima_fecha_suministro THEN
                     RAISE_APPLICATION_ERROR(-20003, 'Error: La fecha de suministro debe ser igual o posterior a la ultima fecha de suministro.');
                 END IF;
             END;
-            """;
+        """;
         
-        // 15. Los datos de un vino solo se podran borrar si la cantidad total de suministrada de ese vino es cero
+        // 15. Borrar Vino solo si suministrado es 0
         String triggerBorrarVino = """
             CREATE OR REPLACE TRIGGER trg_Borrar_Vino_Suministrado
             BEFORE DELETE ON Vino
@@ -69,28 +142,27 @@ public class RestriccionesTriggers{
                 v_total_suministrada NUMBER(8);
             BEGIN
                 SELECT NVL(SUM(cantidad), 0) INTO v_total_suministrada 
-                FROM Pide 
+                FROM Vista_Suministros_Clientes 
                 WHERE cod_vino = :OLD.cod_vino;
                 
                 IF v_total_suministrada > 0 THEN
                     RAISE_APPLICATION_ERROR(-20004, 'Error: No se puede borrar el vino porque tiene cantidad suministrada mayor que cero.');
                 END IF;
             END;
-            """;
+        """;
 
-        // 16. Los datos de un productor solo se podran borrar si para cada vino que produce, la cantidad total suministrada es cero o no existe ningun suministro de ese vino
+        // 16. Borrar Productor (Verificar suministros de sus vinos)
         String trgBorrarProductor = """
             CREATE OR REPLACE TRIGGER trg_Borrar_Productor_Ventas
             BEFORE DELETE ON Productor
             FOR EACH ROW
             DECLARE
-                -- Cursor para recorrer los vinos de ese productor
                 CURSOR cur_vinos IS SELECT cod_vino FROM Vino WHERE productor = :OLD.cod_p;
                 v_total_vendido NUMBER;
             BEGIN
                 FOR v IN cur_vinos LOOP
                     SELECT NVL(SUM(cantidad), 0) INTO v_total_vendido 
-                    FROM Pide 
+                    FROM Vista_Suministros_Clientes 
                     WHERE cod_vino = v.cod_vino;
                     
                     IF v_total_vendido > 0 THEN
@@ -100,7 +172,7 @@ public class RestriccionesTriggers{
             END;
         """;
 
-        // 17. Sucursal no pide a su misma delegación
+        // 17. Sucursal no pide a su misma delegación (CORREGIDO: Usa Vista_Sucursales)
         String trgMismaSucursal = """
             CREATE OR REPLACE TRIGGER trg_17_Delegacion
             BEFORE INSERT OR UPDATE ON Solicita
@@ -109,80 +181,114 @@ public class RestriccionesTriggers{
                 v_ca1 VARCHAR2(50);
                 v_ca2 VARCHAR2(50);
             BEGIN
-                SELECT c_autonoma INTO v_ca1 FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal;
-                SELECT c_autonoma INTO v_ca2 FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal_prov;
+                -- CAMBIO: Usar Vista Global
+                SELECT c_autonoma INTO v_ca1 FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal;
+                SELECT c_autonoma INTO v_ca2 FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal_prov;
                 
                 IF v_ca1 = v_ca2 THEN
                     RAISE_APPLICATION_ERROR(-20017, 'Error: No se puede pedir a una sucursal de la misma delegacion.');
                 END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                   RAISE_APPLICATION_ERROR(-20017, 'Error: Alguna de las sucursales no existe en el sistema global.');
             END;
         """;
 
-        // 18. Cantidad pedida a sucursales no puede exceder demanda de clientes
+        // 18. Cantidad pedida <= demanda
         String trgCantidadDemanda = """
-            CREATE OR REPLACE TRIGGER trg_18_Control_Stock
+           CREATE OR REPLACE TRIGGER trg_validacion_pedido_R18
             BEFORE INSERT OR UPDATE ON Solicita
             FOR EACH ROW
             DECLARE
-                v_demanda_clientes NUMBER := 0;
-                v_ya_pedido        NUMBER := 0;
+                v_total_demandado_clientes NUMBER := 0;
+                v_total_ya_pedido_sucursales NUMBER := 0;
             BEGIN
-                -- Nota: En Pide se llama 'cod_vino', en Solicita 'cod_tipo_vino'
-                SELECT NVL(SUM(cantidad),0) INTO v_demanda_clientes 
-                FROM Pide 
-                WHERE cod_sucursal = :NEW.cod_sucursal AND cod_vino = :NEW.cod_tipo_vino;
-                
-                SELECT NVL(SUM(cantidad),0) INTO v_ya_pedido 
-                FROM Solicita 
-                WHERE cod_sucursal = :NEW.cod_sucursal AND cod_tipo_vino = :NEW.cod_tipo_vino;
+                -- 1. Calculamos el "Techo" (Lo que piden los clientes)
+                -- Usamos la vista 'Vista_Suministros_Clientes' (basada en tabla Pide)
+                -- Nota: En esta vista las columnas mantienen su nombre original.
+                SELECT NVL(SUM(cantidad), 0)
+                INTO v_total_demandado_clientes
+                FROM Vista_Suministros_Clientes
+                WHERE cod_sucursal = :NEW.cod_sucursal
+                AND cod_vino = :NEW.cod_tipo_vino; -- OJO: Tabla Solicita usa 'cod_tipo_vino'
 
-                IF (v_ya_pedido + :NEW.cantidad) > v_demanda_clientes THEN
-                    RAISE_APPLICATION_ERROR(-20018, 'Error: La cantidad solicitada excede la demanda de clientes.');
+                -- 2. Calculamos el "Consumo Actual" (Lo que ya ha pedido esta sucursal)
+                -- Usamos la vista 'Vista_Pedidos_Entre_Sucursales' (basada en tabla Solicita)
+                -- IMPORTANTE: Aquí usamos los ALIAS definidos en tu Java (Suc_Sol, Vino)
+                SELECT NVL(SUM(cantidad), 0)
+                INTO v_total_ya_pedido_sucursales
+                FROM Vista_Pedidos_Entre_Sucursales
+                WHERE Suc_Sol = :NEW.cod_sucursal   -- Alias 'Suc_Sol' corresponde a 'cod_sucursal'
+                AND Vino = :NEW.cod_tipo_vino;    -- Alias 'Vino' corresponde a 'cod_tipo_vino'
+
+                -- 3. Verificación
+                IF (v_total_ya_pedido_sucursales + :NEW.cantidad) > v_total_demandado_clientes THEN
+                    RAISE_APPLICATION_ERROR(-20018, 
+                        'Error R18: Stock excedido. Tus clientes demandan ' || v_total_demandado_clientes || 
+                        ' unidades, pero la sucursal acumularía ' || (v_total_ya_pedido_sucursales + :NEW.cantidad) || ' en pedidos.');
                 END IF;
             END;
         """;
 
         // 19. Si el vino no es de mi zona, pedir a MADRID
         String trgPedirMadrid = """
-            CREATE OR REPLACE TRIGGER trg_19_Ruta_Madrid
+            CREATE OR REPLACE TRIGGER trg_19_Pedir_Al_Origen
             BEFORE INSERT OR UPDATE ON Solicita
             FOR EACH ROW
             DECLARE
-                v_ca_sucursal   VARCHAR2(50);
                 v_ca_vino       VARCHAR2(50);
                 v_ca_proveedora VARCHAR2(50);
-            BEGIN
-                SELECT c_autonoma INTO v_ca_sucursal FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal;
                 
-                -- Buscamos el origen del vino usando la referencia
-                SELECT c_autonoma INTO v_ca_vino     FROM Vino     WHERE cod_vino     = :NEW.cod_tipo_vino;
-                
-                SELECT c_autonoma INTO v_ca_proveedora FROM Sucursal WHERE cod_sucursal = :NEW.cod_sucursal_prov;
-
-                IF v_ca_sucursal != v_ca_vino THEN
-                    IF UPPER(v_ca_proveedora) != 'MADRID' THEN
-                        RAISE_APPLICATION_ERROR(-20019, 'Error: Vinos de otras regiones deben pedirse a Madrid.');
+                -- Función auxiliar para agrupar CCAA en Delegaciones
+                FUNCTION get_delegacion_zona(p_ccaa VARCHAR2) RETURN VARCHAR2 IS
+                BEGIN
+                    IF p_ccaa IN ('Castilla-León', 'Castilla-La Mancha', 'Aragón', 'Madrid', 'La Rioja') THEN RETURN 'CENTRO';
+                    ELSIF p_ccaa IN ('Cataluña', 'Baleares', 'País Valenciano', 'Murcia') THEN RETURN 'LEVANTE';
+                    ELSIF p_ccaa IN ('Galicia', 'Asturias', 'Cantabria', 'País Vasco', 'Navarra') THEN RETURN 'NORTE';
+                    ELSIF p_ccaa IN ('Andalucía', 'Extremadura', 'Canarias', 'Ceuta', 'Melilla') THEN RETURN 'SUR';
+                    ELSE RETURN 'OTRO';
                     END IF;
+                END;
+            BEGIN
+                -- 1. Buscamos de dónde es el vino y de dónde es el proveedor
+                SELECT c_autonoma INTO v_ca_vino       FROM Vista_Vinos      WHERE cod_vino     = :NEW.cod_tipo_vino;
+                SELECT c_autonoma INTO v_ca_proveedora FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal_prov;
+
+                -- 2. Validamos que coincidan las zonas
+                -- Ejemplo: Si el vino es de Cataluña (Levante), el proveedor debe ser de Cataluña/Baleares... (Levante)
+                IF get_delegacion_zona(v_ca_vino) != get_delegacion_zona(v_ca_proveedora) THEN
+                    RAISE_APPLICATION_ERROR(-20019, 
+                        'Error: Debes pedir el vino directamente a su zona de origen. ' ||
+                        'Vino de: ' || v_ca_vino || '. Proveedor es de: ' || v_ca_proveedora);
                 END IF;
+
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                   RAISE_APPLICATION_ERROR(-20020, 'Error: Datos no encontrados al validar origen del vino.');
             END;
         """;
-
-        // 20. Fecha pedido posterior al ultimo pedido de ese vino a esa sucursal
+        // 20. Fecha pedido posterior al ultimo pedido
         String trgFechaOrden = """
-            CREATE OR REPLACE TRIGGER trg_20_Fecha_Orden
+            CREATE OR REPLACE TRIGGER trg_validar_fechas_R20
             BEFORE INSERT OR UPDATE ON Solicita
             FOR EACH ROW
             DECLARE
-                v_max_fecha DATE;
+                v_ultima_fecha DATE;
             BEGIN
-                SELECT MAX(fecha_sol) INTO v_max_fecha
-                FROM Solicita
-                WHERE cod_sucursal = :NEW.cod_sucursal 
-                  AND cod_sucursal_prov = :NEW.cod_sucursal_prov
-                  AND cod_tipo_vino = :NEW.cod_tipo_vino;
+                -- Buscamos la fecha máxima en la vista global
+                -- IMPORTANTE: Usamos los ALIAS de tu Java (Suc_Sol, Suc_Prov, Vino)
+                SELECT MAX(fecha_sol)
+                INTO v_ultima_fecha
+                FROM Vista_Pedidos_Entre_Sucursales
+                WHERE Suc_Sol = :NEW.cod_sucursal           -- Alias para solicitante
+                AND Suc_Prov = :NEW.cod_sucursal_prov     -- Alias para proveedora
+                AND Vino = :NEW.cod_tipo_vino;            -- Alias para el vino
 
-                IF v_max_fecha IS NOT NULL AND :NEW.fecha_sol <= v_max_fecha THEN
-                    RAISE_APPLICATION_ERROR(-20020, 'Error: La fecha debe ser posterior al ultimo pedido de este vino a esta sucursal.');
+                -- Validación
+                IF v_ultima_fecha IS NOT NULL AND :NEW.fecha_sol <= v_ultima_fecha THEN
+                    RAISE_APPLICATION_ERROR(-20020,
+                        'Error R20: Fecha inválida. El último pedido entre estas sucursales fue el ' || 
+                        TO_CHAR(v_ultima_fecha, 'DD/MM/YYYY') || '. El nuevo debe ser posterior.');
                 END IF;
             END;
         """;
@@ -206,6 +312,11 @@ public class RestriccionesTriggers{
         """;
 
         String[] triggers = { 
+            // Integridad Distribuida
+            trgIntegridadPide,
+            trgIntegridadSolicita,
+            trgIntegridadSuministra,
+            // Negocio
             trgBorrarProductor, 
             triggerBorrarVino, 
             triggerFechaSuministro, 
@@ -225,13 +336,21 @@ public class RestriccionesTriggers{
                  Statement stmt = conn.createStatement()) {
 
                 System.out.print("Aplicando Checks... ");
-                for (String sql : cheks) {
+                for (String sql : checks) {
                     try {
                         stmt.executeUpdate(sql);
                     } catch (SQLException e) {
-                        if (e.getErrorCode() != 2260 && e.getErrorCode() != 2275) {
-                            System.err.println("Error: " + e.getMessage());
-                        }
+                         if (e.getErrorCode() != 2260 && e.getErrorCode() != 2275) {}
+                    }
+                }
+                System.out.println("OK");
+
+                System.out.print("Eliminando FKs Locales (Vino)... ");
+                for (String sql : dropFKs) {
+                    try {
+                        stmt.executeUpdate(sql);
+                    } catch (SQLException e) {
+                         if (e.getErrorCode() != 2443) {}
                     }
                 }
                 System.out.println("OK");
