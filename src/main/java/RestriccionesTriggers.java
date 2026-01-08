@@ -333,7 +333,7 @@ public class RestriccionesTriggers {
             trgCantidadDemanda, 
             trgPedirMadrid,
             trgFechaOrden,
-            trgFechaCliente 
+            //trgFechaCliente 
         };
 
         for (DatabaseManager.Delegacion d : DatabaseManager.Delegacion.values()) {

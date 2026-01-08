@@ -60,16 +60,40 @@ public class CreacionProcedimientos {
             END;
             """,
 
-            // 2. Baja Empleado
+            // 2. Baja Empleado (DISTRIBUIDO)
             """
             CREATE OR REPLACE PROCEDURE pr_Baja_Empleado (
                 p_cod_e IN NUMBER
             ) IS
+                v_deleted BOOLEAN := FALSE;
             BEGIN
-                UPDATE Sucursal SET director = NULL WHERE director = p_cod_e;
-                DELETE FROM Empleado WHERE cod_e = p_cod_e;
-                IF SQL%ROWCOUNT = 0 THEN
-                    RAISE_APPLICATION_ERROR(-20007, 'Error: No existe el empleado a borrar.');
+                -- 1. Desvincular como director en TODAS las sucursales (podría dirigir una sucursal en otro nodo)
+                UPDATE cerveza1.Sucursal SET director = NULL WHERE director = p_cod_e;
+                UPDATE cerveza2.Sucursal SET director = NULL WHERE director = p_cod_e;
+                UPDATE cerveza3.Sucursal SET director = NULL WHERE director = p_cod_e;
+                UPDATE cerveza4.Sucursal SET director = NULL WHERE director = p_cod_e;
+
+                -- 2. Borrar Empleado (Buscamos secuencialmente dónde está)
+                DELETE FROM cerveza1.Empleado WHERE cod_e = p_cod_e;
+                IF SQL%ROWCOUNT > 0 THEN v_deleted := TRUE; END IF;
+
+                IF NOT v_deleted THEN
+                    DELETE FROM cerveza2.Empleado WHERE cod_e = p_cod_e;
+                    IF SQL%ROWCOUNT > 0 THEN v_deleted := TRUE; END IF;
+                END IF;
+
+                IF NOT v_deleted THEN
+                    DELETE FROM cerveza3.Empleado WHERE cod_e = p_cod_e;
+                    IF SQL%ROWCOUNT > 0 THEN v_deleted := TRUE; END IF;
+                END IF;
+
+                IF NOT v_deleted THEN
+                    DELETE FROM cerveza4.Empleado WHERE cod_e = p_cod_e;
+                    IF SQL%ROWCOUNT > 0 THEN v_deleted := TRUE; END IF;
+                END IF;
+
+                IF NOT v_deleted THEN
+                    RAISE_APPLICATION_ERROR(-20007, 'Error: No existe el empleado a borrar en ninguna delegación.');
                 END IF;
             END;
             """,
@@ -411,22 +435,106 @@ public class CreacionProcedimientos {
                     RAISE_APPLICATION_ERROR(-20016, 'Error: Ya existe un vino con ese código.');
             END;
             """,
-
-            // 13. Baja Vino
+            
+            // 13. Baja Vino (DISTRIBUIDO)
             """
             CREATE OR REPLACE PROCEDURE pr_Baja_Vino (
                 p_cod_vino IN NUMBER
             ) IS
+                v_stock NUMBER;
+                v_count NUMBER := 0;
+                v_encontrado BOOLEAN := FALSE;
+                v_nodo_origen VARCHAR2(10);
             BEGIN
-                DELETE FROM Pide WHERE cod_vino = p_cod_vino;
-                DELETE FROM Solicita WHERE cod_tipo_vino = p_cod_vino;
-                DELETE FROM Suministra WHERE cod_vino = p_cod_vino;
-
-                DELETE FROM Vino WHERE cod_vino = p_cod_vino;
+                -- 1. VERIFICAR STOCK (Buscamos dónde está el vino y si tiene stock)
                 
-                IF SQL%ROWCOUNT = 0 THEN
-                    RAISE_APPLICATION_ERROR(-20017, 'Error: No existe el vino a borrar.');
+                -- Nodo 1
+                BEGIN
+                    SELECT stock INTO v_stock FROM cerveza1.Vino WHERE cod_vino = p_cod_vino;
+                    v_encontrado := TRUE; v_nodo_origen := 'cerveza1';
+                    IF v_stock > 0 THEN RAISE_APPLICATION_ERROR(-20020, 'No se puede borrar: El vino tiene STOCK ('||v_stock||') en cerveza1.'); END IF;
+                EXCEPTION WHEN NO_DATA_FOUND THEN NULL; END;
+
+                -- Nodo 2
+                IF NOT v_encontrado THEN
+                    BEGIN
+                        SELECT stock INTO v_stock FROM cerveza2.Vino WHERE cod_vino = p_cod_vino;
+                        v_encontrado := TRUE; v_nodo_origen := 'cerveza2';
+                        IF v_stock > 0 THEN RAISE_APPLICATION_ERROR(-20020, 'No se puede borrar: El vino tiene STOCK ('||v_stock||') en cerveza2.'); END IF;
+                    EXCEPTION WHEN NO_DATA_FOUND THEN NULL; END;
                 END IF;
+
+                -- Nodo 3
+                IF NOT v_encontrado THEN
+                    BEGIN
+                        SELECT stock INTO v_stock FROM cerveza3.Vino WHERE cod_vino = p_cod_vino;
+                        v_encontrado := TRUE; v_nodo_origen := 'cerveza3';
+                        IF v_stock > 0 THEN RAISE_APPLICATION_ERROR(-20020, 'No se puede borrar: El vino tiene STOCK ('||v_stock||') en cerveza3.'); END IF;
+                    EXCEPTION WHEN NO_DATA_FOUND THEN NULL; END;
+                END IF;
+
+                -- Nodo 4
+                IF NOT v_encontrado THEN
+                    BEGIN
+                        SELECT stock INTO v_stock FROM cerveza4.Vino WHERE cod_vino = p_cod_vino;
+                        v_encontrado := TRUE; v_nodo_origen := 'cerveza4';
+                        IF v_stock > 0 THEN RAISE_APPLICATION_ERROR(-20020, 'No se puede borrar: El vino tiene STOCK ('||v_stock||') en cerveza4.'); END IF;
+                    EXCEPTION WHEN NO_DATA_FOUND THEN NULL; END;
+                END IF;
+
+                IF NOT v_encontrado THEN
+                    RAISE_APPLICATION_ERROR(-20017, 'Error: El vino no existe en ninguna delegación.');
+                END IF;
+
+                -- 2. VERIFICAR SI HAY PEDIDOS O SUMINISTROS (Revisar los 4 nodos)
+                -- Sumamos todas las apariciones en las tablas Pide, Solicita y Suministra de todos los nodos
+                
+                -- Check Cerveza 1
+                SELECT count(*) INTO v_count FROM cerveza1.Pide WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos de clientes (Pide) en cerveza1.'); END IF;
+                
+                SELECT count(*) INTO v_count FROM cerveza1.Solicita WHERE cod_tipo_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos entre sucursales (Solicita) en cerveza1.'); END IF;
+
+                SELECT count(*) INTO v_count FROM cerveza1.Suministra WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: El vino está en catálogos de suministro en cerveza1.'); END IF;
+
+                -- Check Cerveza 2
+                SELECT count(*) INTO v_count FROM cerveza2.Pide WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos de clientes (Pide) en cerveza2.'); END IF;
+                
+                SELECT count(*) INTO v_count FROM cerveza2.Solicita WHERE cod_tipo_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos entre sucursales (Solicita) en cerveza2.'); END IF;
+
+                SELECT count(*) INTO v_count FROM cerveza2.Suministra WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: El vino está en catálogos de suministro en cerveza2.'); END IF;
+
+                -- Check Cerveza 3
+                SELECT count(*) INTO v_count FROM cerveza3.Pide WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos de clientes (Pide) en cerveza3.'); END IF;
+                
+                SELECT count(*) INTO v_count FROM cerveza3.Solicita WHERE cod_tipo_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos entre sucursales (Solicita) en cerveza3.'); END IF;
+
+                SELECT count(*) INTO v_count FROM cerveza3.Suministra WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: El vino está en catálogos de suministro en cerveza3.'); END IF;
+
+                -- Check Cerveza 4
+                SELECT count(*) INTO v_count FROM cerveza4.Pide WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos de clientes (Pide) en cerveza4.'); END IF;
+                
+                SELECT count(*) INTO v_count FROM cerveza4.Solicita WHERE cod_tipo_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: Hay pedidos entre sucursales (Solicita) en cerveza4.'); END IF;
+
+                SELECT count(*) INTO v_count FROM cerveza4.Suministra WHERE cod_vino = p_cod_vino;
+                IF v_count > 0 THEN RAISE_APPLICATION_ERROR(-20021, 'No se puede borrar: El vino está en catálogos de suministro en cerveza4.'); END IF;
+
+                -- 3. BORRAR EL VINO (Si hemos llegado aquí, es seguro borrar)
+                IF v_nodo_origen = 'cerveza1' THEN DELETE FROM cerveza1.Vino WHERE cod_vino = p_cod_vino; END IF;
+                IF v_nodo_origen = 'cerveza2' THEN DELETE FROM cerveza2.Vino WHERE cod_vino = p_cod_vino; END IF;
+                IF v_nodo_origen = 'cerveza3' THEN DELETE FROM cerveza3.Vino WHERE cod_vino = p_cod_vino; END IF;
+                IF v_nodo_origen = 'cerveza4' THEN DELETE FROM cerveza4.Vino WHERE cod_vino = p_cod_vino; END IF;
+
             END;
             """,
             
