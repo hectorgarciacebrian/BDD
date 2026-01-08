@@ -5,7 +5,7 @@ import java.sql.Statement;
 public class RestriccionesTriggers {
     public static void main(String[] args) {
         DatabaseManager db = DatabaseManager.getInstance();
-        System.out.println("--- APLICANDO RESTRICCIONES Y TRIGGERS (CORREGIDO VISTAS) ---");
+        System.out.println("--- APLICANDO RESTRICCIONES Y TRIGGERS (CORREGIDO FINAL) ---");
 
         // 1. CHECKS ESTÁNDAR
         String[] checks = {
@@ -13,13 +13,17 @@ public class RestriccionesTriggers {
             "ALTER TABLE Vino ADD CONSTRAINT CK_Stock_Logico CHECK (stock >= 0 and stock <= c_producida)"
         };
 
-        // 2. ELIMINACIÓN DE FKs LOCALES SOBRE VINO
+        // 2. ELIMINACIÓN DE FKs LOCALES 
+        // Eliminamos las FKs locales que apuntan a tablas fragmentadas (Vino, Sucursal)
         String[] dropFKs = {
             "ALTER TABLE Pide DROP CONSTRAINT FK_Pide_Vino",
             "ALTER TABLE Solicita DROP CONSTRAINT FK_Solicita_Vino",
-            "ALTER TABLE Suministra DROP CONSTRAINT FK_Suministra_Vino"
+            "ALTER TABLE Suministra DROP CONSTRAINT FK_Suministra_Vino",
+            "ALTER TABLE Solicita DROP CONSTRAINT FK_Solicita_Suc_Prov"
         };
 
+        // --- TRIGGERS DE INTEGRIDAD DISTRIBUIDA ---
+        
         // INTEGRIDAD: Comprobar vino en Pide mirando la VISTA GLOBAL
         String trgIntegridadPide = """
             CREATE OR REPLACE TRIGGER trg_Integridad_Pide_Vino
@@ -65,6 +69,25 @@ public class RestriccionesTriggers {
             END;
         """;
 
+        // INTEGRIDAD: Comprobar sucursal en Solicita mirando la VISTA GLOBAL (CORREGIDO)
+        String trgIntegridadSolicitaSuc = """
+            CREATE OR REPLACE TRIGGER trg_Integridad_Sol_SucProv
+            BEFORE INSERT OR UPDATE OF cod_sucursal_prov ON Solicita  -- Corregido: cod_sucursal_prov
+            FOR EACH ROW
+            DECLARE
+                v_existe NUMBER;
+            BEGIN
+                -- Comprobamos en la VISTA GLOBAL, no en la tabla local
+                SELECT COUNT(*) INTO v_existe FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal_prov;
+                
+                IF v_existe = 0 THEN
+                    RAISE_APPLICATION_ERROR(-20000, 'Error Integridad: La Sucursal proveedora ' || :NEW.cod_sucursal_prov || ' no existe en ninguna delegación.');
+                END IF;
+            END;
+        """;
+
+        // --- TRIGGERS DE REGLAS DE NEGOCIO ---
+
         // 6. El salario no puede disminuirse
         String triggerSalario = """
             CREATE OR REPLACE TRIGGER trg_Salario_NoDisminuye
@@ -77,7 +100,7 @@ public class RestriccionesTriggers {
             END;
         """;
 
-        // 9. Cliente solo pide a sucursal de su delegacion (CORREGIDO: Usa Vistas)
+        // 9. Cliente solo pide a sucursal de su delegacion
         String triggerClienteDelegacion = """
             CREATE OR REPLACE TRIGGER trg_Cliente_Pide_Delegacion
             BEFORE INSERT OR UPDATE ON Pide
@@ -98,7 +121,6 @@ public class RestriccionesTriggers {
                     END IF;
                 END;
             BEGIN
-                -- CAMBIO: Usamos Vistas Globales para evitar error si el cliente/sucursal es de otro nodo
                 SELECT c_autonoma INTO v_ca_cliente FROM Vista_Clientes WHERE cod_c = :NEW.cod_cliente;
                 SELECT c_autonoma INTO v_ca_sucursal FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal;
 
@@ -151,7 +173,7 @@ public class RestriccionesTriggers {
             END;
         """;
 
-        // 16. Borrar Productor (Verificar suministros de sus vinos)
+        // 16. Borrar Productor
         String trgBorrarProductor = """
             CREATE OR REPLACE TRIGGER trg_Borrar_Productor_Ventas
             BEFORE DELETE ON Productor
@@ -172,7 +194,7 @@ public class RestriccionesTriggers {
             END;
         """;
 
-        // 17. Sucursal no pide a su misma delegación (CORREGIDO: Usa Vista_Sucursales)
+        // 17. Sucursal no pide a su misma delegación
         String trgMismaSucursal = """
             CREATE OR REPLACE TRIGGER trg_17_Delegacion
             BEFORE INSERT OR UPDATE ON Solicita
@@ -181,7 +203,6 @@ public class RestriccionesTriggers {
                 v_ca1 VARCHAR2(50);
                 v_ca2 VARCHAR2(50);
             BEGIN
-                -- CAMBIO: Usar Vista Global
                 SELECT c_autonoma INTO v_ca1 FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal;
                 SELECT c_autonoma INTO v_ca2 FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal_prov;
                 
@@ -194,7 +215,7 @@ public class RestriccionesTriggers {
             END;
         """;
 
-        // 18. Cantidad pedida <= demanda
+        // 18. Cantidad pedida <= demanda (OPCIONAL: Coméntalo si falla la carga inicial)
         String trgCantidadDemanda = """
            CREATE OR REPLACE TRIGGER trg_validacion_pedido_R18
             BEFORE INSERT OR UPDATE ON Solicita
@@ -203,34 +224,27 @@ public class RestriccionesTriggers {
                 v_total_demandado_clientes NUMBER := 0;
                 v_total_ya_pedido_sucursales NUMBER := 0;
             BEGIN
-                -- 1. Calculamos el "Techo" (Lo que piden los clientes)
-                -- Usamos la vista 'Vista_Suministros_Clientes' (basada en tabla Pide)
-                -- Nota: En esta vista las columnas mantienen su nombre original.
                 SELECT NVL(SUM(cantidad), 0)
                 INTO v_total_demandado_clientes
                 FROM Vista_Suministros_Clientes
                 WHERE cod_sucursal = :NEW.cod_sucursal
-                AND cod_vino = :NEW.cod_tipo_vino; -- OJO: Tabla Solicita usa 'cod_tipo_vino'
+                AND cod_vino = :NEW.cod_tipo_vino; 
 
-                -- 2. Calculamos el "Consumo Actual" (Lo que ya ha pedido esta sucursal)
-                -- Usamos la vista 'Vista_Pedidos_Entre_Sucursales' (basada en tabla Solicita)
-                -- IMPORTANTE: Aquí usamos los ALIAS definidos en tu Java (Suc_Sol, Vino)
                 SELECT NVL(SUM(cantidad), 0)
                 INTO v_total_ya_pedido_sucursales
                 FROM Vista_Pedidos_Entre_Sucursales
-                WHERE Suc_Sol = :NEW.cod_sucursal   -- Alias 'Suc_Sol' corresponde a 'cod_sucursal'
-                AND Vino = :NEW.cod_tipo_vino;    -- Alias 'Vino' corresponde a 'cod_tipo_vino'
+                WHERE Suc_Sol = :NEW.cod_sucursal   
+                AND Vino = :NEW.cod_tipo_vino;    
 
-                -- 3. Verificación
                 IF (v_total_ya_pedido_sucursales + :NEW.cantidad) > v_total_demandado_clientes THEN
                     RAISE_APPLICATION_ERROR(-20018, 
-                        'Error R18: Stock excedido. Tus clientes demandan ' || v_total_demandado_clientes || 
-                        ' unidades, pero la sucursal acumularía ' || (v_total_ya_pedido_sucursales + :NEW.cantidad) || ' en pedidos.');
+                        'Error R18: Stock excedido. Demanda: ' || v_total_demandado_clientes || 
+                        '. Acumulado + Nuevo: ' || (v_total_ya_pedido_sucursales + :NEW.cantidad));
                 END IF;
             END;
         """;
 
-        // 19. Si el vino no es de mi zona, pedir a MADRID
+        // 19. Pedir a zona de origen
         String trgPedirMadrid = """
             CREATE OR REPLACE TRIGGER trg_19_Pedir_Al_Origen
             BEFORE INSERT OR UPDATE ON Solicita
@@ -239,7 +253,6 @@ public class RestriccionesTriggers {
                 v_ca_vino       VARCHAR2(50);
                 v_ca_proveedora VARCHAR2(50);
                 
-                -- Función auxiliar para agrupar CCAA en Delegaciones
                 FUNCTION get_delegacion_zona(p_ccaa VARCHAR2) RETURN VARCHAR2 IS
                 BEGIN
                     IF p_ccaa IN ('Castilla-León', 'Castilla-La Mancha', 'Aragón', 'Madrid', 'La Rioja') THEN RETURN 'CENTRO';
@@ -250,16 +263,12 @@ public class RestriccionesTriggers {
                     END IF;
                 END;
             BEGIN
-                -- 1. Buscamos de dónde es el vino y de dónde es el proveedor
                 SELECT c_autonoma INTO v_ca_vino       FROM Vista_Vinos      WHERE cod_vino     = :NEW.cod_tipo_vino;
                 SELECT c_autonoma INTO v_ca_proveedora FROM Vista_Sucursales WHERE cod_sucursal = :NEW.cod_sucursal_prov;
 
-                -- 2. Validamos que coincidan las zonas
-                -- Ejemplo: Si el vino es de Cataluña (Levante), el proveedor debe ser de Cataluña/Baleares... (Levante)
                 IF get_delegacion_zona(v_ca_vino) != get_delegacion_zona(v_ca_proveedora) THEN
                     RAISE_APPLICATION_ERROR(-20019, 
-                        'Error: Debes pedir el vino directamente a su zona de origen. ' ||
-                        'Vino de: ' || v_ca_vino || '. Proveedor es de: ' || v_ca_proveedora);
+                        'Error: Debes pedir el vino directamente a su zona de origen (' || get_delegacion_zona(v_ca_vino) || ')');
                 END IF;
 
             EXCEPTION
@@ -267,6 +276,7 @@ public class RestriccionesTriggers {
                    RAISE_APPLICATION_ERROR(-20020, 'Error: Datos no encontrados al validar origen del vino.');
             END;
         """;
+
         // 20. Fecha pedido posterior al ultimo pedido
         String trgFechaOrden = """
             CREATE OR REPLACE TRIGGER trg_validar_fechas_R20
@@ -275,20 +285,16 @@ public class RestriccionesTriggers {
             DECLARE
                 v_ultima_fecha DATE;
             BEGIN
-                -- Buscamos la fecha máxima en la vista global
-                -- IMPORTANTE: Usamos los ALIAS de tu Java (Suc_Sol, Suc_Prov, Vino)
                 SELECT MAX(fecha_sol)
                 INTO v_ultima_fecha
                 FROM Vista_Pedidos_Entre_Sucursales
-                WHERE Suc_Sol = :NEW.cod_sucursal           -- Alias para solicitante
-                AND Suc_Prov = :NEW.cod_sucursal_prov     -- Alias para proveedora
-                AND Vino = :NEW.cod_tipo_vino;            -- Alias para el vino
+                WHERE Suc_Sol = :NEW.cod_sucursal       
+                AND Suc_Prov = :NEW.cod_sucursal_prov     
+                AND Vino = :NEW.cod_tipo_vino;            
 
-                -- Validación
                 IF v_ultima_fecha IS NOT NULL AND :NEW.fecha_sol <= v_ultima_fecha THEN
                     RAISE_APPLICATION_ERROR(-20020,
-                        'Error R20: Fecha inválida. El último pedido entre estas sucursales fue el ' || 
-                        TO_CHAR(v_ultima_fecha, 'DD/MM/YYYY') || '. El nuevo debe ser posterior.');
+                        'Error R20: Fecha inválida. El nuevo pedido debe ser posterior al ' || TO_CHAR(v_ultima_fecha, 'DD/MM/YYYY'));
                 END IF;
             END;
         """;
@@ -316,6 +322,7 @@ public class RestriccionesTriggers {
             trgIntegridadPide,
             trgIntegridadSolicita,
             trgIntegridadSuministra,
+            trgIntegridadSolicitaSuc,
             // Negocio
             trgBorrarProductor, 
             triggerBorrarVino, 
@@ -323,7 +330,7 @@ public class RestriccionesTriggers {
             triggerClienteDelegacion, 
             triggerSalario,
             trgMismaSucursal,
-            trgCantidadDemanda,
+            trgCantidadDemanda, 
             trgPedirMadrid,
             trgFechaOrden,
             trgFechaCliente 
@@ -340,17 +347,17 @@ public class RestriccionesTriggers {
                     try {
                         stmt.executeUpdate(sql);
                     } catch (SQLException e) {
-                         if (e.getErrorCode() != 2260 && e.getErrorCode() != 2275) {}
+                         if (e.getErrorCode() != 2260 && e.getErrorCode() != 2275) {} // Ignorar si ya existen
                     }
                 }
                 System.out.println("OK");
 
-                System.out.print("Eliminando FKs Locales (Vino)... ");
+                System.out.print("Eliminando FKs Locales (Vino/Sucursal)... ");
                 for (String sql : dropFKs) {
                     try {
                         stmt.executeUpdate(sql);
                     } catch (SQLException e) {
-                         if (e.getErrorCode() != 2443) {}
+                         if (e.getErrorCode() != 2443) {} // Ignorar si no existen
                     }
                 }
                 System.out.println("OK");

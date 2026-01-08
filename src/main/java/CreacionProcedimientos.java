@@ -9,7 +9,7 @@ public class CreacionProcedimientos {
 
         String[] procedures = {
             
-            // --- NUEVO PROCEDIMIENTO: OBTENER DELEGACIÓN ---
+            // Procedimiento auxiliar para obtener delegación según CCAA
             """
             CREATE OR REPLACE PROCEDURE PR_GET_DELEGACION (
                 xDelegacion OUT VARCHAR2, 
@@ -45,7 +45,13 @@ public class CreacionProcedimientos {
                 p_direccion  IN VARCHAR2,
                 p_sucursal   IN NUMBER
             ) IS
+                v_existe NUMBER;
             BEGIN
+                SELECT COUNT(*) INTO v_existe FROM vista_empleados WHERE cod_e = p_cod_e OR dni_e = p_dni;
+                IF v_existe > 0 THEN
+                    RAISE_APPLICATION_ERROR(-20006, 'Error: Ya existe un empleado con ese Codigo o DNI.');
+                END IF;
+                -- Si no existe, insertamos
                 INSERT INTO Empleado (cod_e, dni_e, nombre_e, fecha_comp, salario, direccion_e, sucursal_dest)
                 VALUES (p_cod_e, p_dni, p_nombre, p_fecha, p_salario, p_direccion, p_sucursal);
             EXCEPTION
@@ -110,7 +116,12 @@ public class CreacionProcedimientos {
                 p_director   IN NUMBER DEFAULT NULL
             ) IS
                 v_delegacion_calc VARCHAR2(50);
+                v_existe NUMBER;
             BEGIN
+                SELECT COUNT (*) INTO v_existe FROM vista_sucursales WHERE cod_sucursal = p_cod_suc;
+                IF v_existe > 0 THEN
+                    RAISE_APPLICATION_ERROR(-20010, 'Error: Ya existe una sucursal con ese Codigo.');
+                END IF;
                 PR_GET_DELEGACION(v_delegacion_calc, p_c_autonoma);
                 INSERT INTO Sucursal (cod_sucursal, nombre, ciudad, c_autonoma, director)
                 VALUES (p_cod_suc, p_nombre, p_ciudad, p_c_autonoma, p_director);
@@ -142,7 +153,12 @@ public class CreacionProcedimientos {
                 p_c_autonoma IN VARCHAR2
             ) IS
                 v_check_delegacion VARCHAR2(50);
+                v_existe NUMBER;
             BEGIN
+                SELECT COUNT (*) INTO v_existe FROM vista_clientes WHERE cod_c = p_cod_c;
+                IF v_existe > 0 THEN
+                    RAISE_APPLICATION_ERROR(-20011, 'Error: Cliente ya existe.');
+                END IF;
                 PR_GET_DELEGACION(v_check_delegacion, p_c_autonoma);
                 INSERT INTO Cliente (cod_c, dni_c, nombre_c, direccion_c, tipo_c, c_autonoma)
                 VALUES (p_cod_c, p_dni, p_nombre, p_direccion, p_tipo, p_c_autonoma);
@@ -422,7 +438,12 @@ public class CreacionProcedimientos {
                 p_nombre_p    IN VARCHAR2,
                 p_direccion_p IN VARCHAR2
             ) IS
+                v_existe NUMBER;
             BEGIN
+                SELECT COUNT(*) INTO v_existe FROM Vista_Productores WHERE cod_p = p_cod_p AND dni_p != p_dni_p;
+                IF v_existe > 0 THEN
+                    RAISE_APPLICATION_ERROR(-20018, 'Error: Ya existe productor con ese Código o DNI.');
+                END IF;
                 INSERT INTO Productor (cod_p, dni_p, nombre_p, direccion_p)
                 VALUES (p_cod_p, p_dni_p, p_nombre_p, p_direccion_p);
             EXCEPTION
